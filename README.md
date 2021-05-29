@@ -118,16 +118,16 @@ To find new contract combinators, you can use `apropos-function`:
 
        (apropos-function "^contract-.+-c$")
 
-    (To use the above snippet, either copy-paste it into your scratch buffer and
-    call M-x `eval-buffer`, or call M-x `apropos-function` and type in the
-    pattern).
+To use the above snippet, either copy-paste it into your scratch buffer and
+call M-x `eval-buffer`, or call M-x `apropos-function` and type in the
+pattern.
 
 ## Performance
 
-Contracts can be disabled by setting `contract-enable`.
+Contracts can be disabled by setting `contract-enable` to nil.
 
 "Slow" contracts (those that are self-reported to take more than
-constant-time) can be disabled by setting `contract-enable-slow`.
+constant-time) can be disabled by setting `contract-enable-slow` to nil.
 
 Contracts are be written in the "late negative blame" style by default, which
 can improve performance if contracts are mostly attached to "exported"

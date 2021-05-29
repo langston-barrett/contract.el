@@ -144,9 +144,9 @@
 ;;
 ;;    (apropos-function "^contract-.+-c$")
 ;;
-;; (To use the above snippet, either copy-paste it into your scratch buffer and
+;; To use the above snippet, either copy-paste it into your scratch buffer and
 ;; call M-x `eval-buffer', or call M-x `apropos-function' and type in the
-;; pattern).
+;; pattern.
 
 ;; Performance:
 ;;
