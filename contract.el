@@ -795,10 +795,10 @@ after applying VALUE.
            finally return t))
 
 (defsubst contract--are-first-order (contracts)
-   "Are CONTRACTS all first-order?"
-   (cl-loop for c in contracts
-            if (not (contract-is-first-order c)) return nil
-            finally return t))
+  "Are CONTRACTS all first-order?"
+  (cl-loop for c in contracts
+           if (not (contract-is-first-order c)) return nil
+           finally return t))
 
 ;; TODO: This is to be used in avoiding lambdas in contract->d, see below.
 ;;
