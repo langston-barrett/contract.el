@@ -126,6 +126,15 @@
 ;; And we could go on, providing more and more guarantees, documentation, and
 ;; helpful error messages.
 
+;; Usage:
+;;
+;; The easiest way to get started is with the `contract-defun' macro, which
+;; works like `defun' except it also takes a `:contract' argument:
+;;
+;;    (contract-defun id (x)
+;;      :contract (contract-> contract-any-c contract-any-c)
+;;      x)
+
 ;; Performance:
 ;;
 ;; Contracts can be disabled by setting `contract-enable'.
@@ -1085,6 +1094,13 @@ Looks at `contract-enable' and `contract-enable-slow'."
     contract-enable-slow
     (contract-is-constant-time contract))))
 
+(defsubst contract--blame-for-function (func)
+  ;; TODO: Does this work with e.g. lambdas passed directly? Presumably not?
+  (let ((name (symbol-name func)))
+    (contract-make-blame
+     :positive-party name
+     :negative-party (concat "caller of " name))))
+
 (defun contract-advise (contract func)
   "Advise FUNC by applying CONTRACT to it.
 
@@ -1093,11 +1109,7 @@ Cautiously will not advice any function with pre-existing advice."
   ;; below its definition.
   (unless (or (advice--p (advice--symbol-function func))
               (not (contract--should-enable contract)))
-    ;; TODO: Does this work with e.g. lambdas passed directly? Presumably not?
-    (let* ((name (symbol-name func))
-           (blame (contract-make-blame
-                   :positive-party name
-                   :negative-party (concat "caller of " name)))
+    (let* ((blame (contract--blame-for-function func))
            (contracted (contract-apply contract func blame)))
       (advice-add func :override contracted))))
 
@@ -1115,7 +1127,21 @@ Cautiously will not advice any function with pre-existing advice."
    #'contract-advise)
   (setq contract--contract-advise-advised t))
 
-;; TODO: define/contract
+(defmacro contract-defun (name arguments &rest forms)
+  `(setf
+    (symbol-function (quote ,name))
+    (contract-apply
+     ,(if (equal (car forms) :contract)
+          (progn
+            (pop forms)
+            (pop forms))
+        contract-any-c)
+     (lambda ,arguments ,@forms)
+     (contract-make-blame
+      :positive-party
+      ,(symbol-name name)
+      :negative-party
+      ,(concat "caller of " (symbol-name name))))))
 
 ;;;; Contracts for Built-Ins
 

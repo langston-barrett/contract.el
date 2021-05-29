@@ -308,3 +308,27 @@ In:
   (contract-> (contract-> contract-any-c contract-any-c) contract-sequence-c contract-sequence-c)
 Call stack:
   ")))
+
+(describe
+ "contract-defun"
+ (it "works with id and (contract-> contract-nil-c contract-nil-c)."
+     (expect
+      (progn
+        (contract-defun
+         id (x)
+         :contract (contract-> contract-nil-c contract-nil-c)
+         x)
+        (id nil))
+      :to-equal
+      nil))
+ (it "fails with id and (contract-> contract-nil-c contract-t-c)."
+     (expect
+      (progn
+        (contract-defun
+         id (x)
+         :contract (contract-> contract-nil-c contract-t-c)
+         x)
+        (not (ignore-error contract-violation
+               (id nil))))
+      :to-equal
+      t)))

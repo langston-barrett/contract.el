@@ -100,6 +100,15 @@ value is not equal to the first argument:
 And we could go on, providing more and more guarantees, documentation, and
 helpful error messages.
 
+## Usage
+
+The easiest way to get started is with the `contract-defun` macro, which
+works like `defun` except it also takes a `:contract` argument:
+
+       (contract-defun id (x)
+         :contract (contract-> contract-any-c contract-any-c)
+         x)
+
 ## Performance
 
 Contracts can be disabled by setting `contract-enable`.
