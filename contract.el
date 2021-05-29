@@ -131,16 +131,29 @@
 ;; The easiest way to get started is with the `contract-defun' macro, which
 ;; works like `defun' except it also takes a `:contract' argument:
 ;;
-;;    (contract-defun id (x)
+;;    (contract-defun message-id (x)
 ;;      :contract (contract-> contract-any-c contract-any-c)
-;;      x)
+;;      "Print the value X to the messages buffer, and return it."  ; docstring
+;;      (message "%s" x)  ; body
+;;      x)  ; more body
+;;
+;; With the above definition, the contract will get checked whenever `mesage-id'
+;; is called.
+;;
+;; To find new contract combinators, you can use `apropos-function':
+;;
+;;    (apropos-function "^contract-.+-c$")
+;;
+;; (To use the above snippet, either copy-paste it into your scratch buffer and
+;; call M-x `eval-buffer', or call M-x `apropos-function' and type in the
+;; pattern).
 
 ;; Performance:
 ;;
-;; Contracts can be disabled by setting `contract-enable'.
+;; Contracts can be disabled by setting `contract-enable' to nil.
 ;;
 ;; "Slow" contracts (those that are self-reported to take more than
-;; constant-time) can be disabled by setting `contract-enable-slow'.
+;; constant-time) can be disabled by setting `contract-enable-slow' to nil.
 ;;
 ;; Contracts are be written in the "late negative blame" style by default, which
 ;; can improve performance if contracts are mostly attached to "exported"
@@ -622,6 +635,45 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
    "contract-string-c"
    t)
   "Contract that checks that a value is `stringp'.")
+
+(defun contract-string-suffix-c (str)
+  "Contract to check that a string is a suffix of STR.
+
+>> (contract-contract-p (contract-string-suffix-c \"haystack\"))
+=> t"
+  (contract--make-first-order-contract
+   (lambda (sub) (string-suffix-p sub str))
+   (concat
+    (format "Expected a suffix of %s" str)
+    ", but got %s")
+   (contract--sexp-str "contract-string-suffix-c" (format "%s" str))
+   t))
+
+(defun contract-string-prefix-c (str)
+  "Contract to check that a string is a prefix of STR.
+
+>> (contract-contract-p (contract-string-prefix-c \"haystack\"))
+=> t"
+  (contract--make-first-order-contract
+   (lambda (sub) (string-prefix-p sub str))
+   (concat
+    (format "Expected a prefix of %s" str)
+    ", but got %s")
+   (contract--sexp-str "contract-string-prefix-c" (format "%s" str))
+   t))
+
+(defun contract-substring-c (str)
+  "Contract to check that a string is a substring of STR.
+
+>> (contract-contract-p (contract-substring-c \"haystack\"))
+=> t"
+  (contract--make-first-order-contract
+   (lambda (sub) (string-match-p (regexp-quote sub) str))
+   (concat
+    (format "Expected a substring of %s" str)
+    ", but got %s")
+   (contract--sexp-str "contract-substring-c" (format "%s" str))
+   t))
 
 (defun contract-lt-c (val)
   "Contract to check that a value is less than VAL.
@@ -1127,6 +1179,7 @@ Cautiously will not advice any function with pre-existing advice."
    #'contract-advise)
   (setq contract--contract-advise-advised t))
 
+;; TODO: Rewrite recursive calls to avoid contract checking overhead?
 (defmacro contract-defun (name arguments &rest forms)
   `(setf
     (symbol-function (quote ,name))

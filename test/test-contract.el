@@ -98,6 +98,16 @@
      (expect nil :to-pass (contract-not-c contract-t-c))))
 
 (describe
+ "contract-lt-c"
+ (it "passes." (expect 1 :to-pass (contract-lt-c 2)))
+ (it "fails." (expect 2 :to-fail (contract-lt-c 2))))
+
+(describe
+ "contract-substring-c"
+ (it "passes." (expect "sub" :to-pass (contract-substring-c "substring")))
+ (it "fails." (expect "not" :to-fail (contract-substring-c "sub"))))
+
+(describe
  "contract-nat-number-c"
  (it
   "provides decent error messages"

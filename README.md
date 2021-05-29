@@ -105,9 +105,22 @@ helpful error messages.
 The easiest way to get started is with the `contract-defun` macro, which
 works like `defun` except it also takes a `:contract` argument:
 
-       (contract-defun id (x)
+       (contract-defun message-id (x)
          :contract (contract-> contract-any-c contract-any-c)
-         x)
+         "Print the value X to the messages buffer, and return it."  ; docstring
+         (message "%s" x)  ; body
+         x)  ; more body
+
+With the above definition, the contract will get checked whenever `mesage-id`
+is called.
+
+To find new contract combinators, you can use `apropos-function`:
+
+       (apropos-function "^contract-.+-c$")
+
+    (To use the above snippet, either copy-paste it into your scratch buffer and
+    call M-x `eval-buffer`, or call M-x `apropos-function` and type in the
+    pattern).
 
 ## Performance
 
