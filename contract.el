@@ -1210,6 +1210,10 @@ The last contract is the contract for the function's return value.
                :callstack (contract--function-stack))
               value))))))))
 
+(defsubst contract-maybe-c (contract)
+  "Check that a value is either nil or conforms to CONTRACT."
+  (contract-or-c contract-nil-c contract))
+
 (defun contract-not-c (contract)
   "Negate CONTRACT.
 
