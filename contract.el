@@ -140,13 +140,44 @@
 ;; With the above definition, the contract will get checked whenever `mesage-id'
 ;; is called.
 ;;
+;; Basic Contracts:
+;;
+;; This package provides a number of basic contracts for simple conditions on
+;; values:
+;;
+;; * `contract-nil-c': Checks that a value is `eq' to nil.
+;; * `contract-any-c': Doesn't check anything.
+;; * `contract-function-c': Checks that a value is `functionp'.
+;; * `contract-nat-number-c': Checks that a value is `natnump'.
+;; * and many others...
+;;
+;; Some are functions that create contracts based some input values:
+;;
+;; * `contract-lt-c': Checks that a value is less than a given value.
+;; * `contract-substring-c': Checks that a value is a substring to a given string.
+;; * and many others...
+;;
+;; Contract Combinators:
+;;
+;; In addition to the basic contracts, there are a number of "combinators" that
+;; can be used to construct more complex contracts out of simpler ones. The most
+;; important are:
+;;
+;; * `contract-not-c': For negating contracts
+;; * `contract-and-c'
+;; * `contract-or-c'
+;; * `contract->': For describing functions
+;; * `contract->d': For very precise, thorough description of functions
+;;
+;; Discovering New Contracts and Combinators:
+;;
 ;; To find new contract combinators, you can use `apropos-function':
 ;;
 ;;    (apropos-function "^contract-.+-c$")
 ;;
 ;; To use the above snippet, either copy-paste it into your scratch buffer and
 ;; call M-x `eval-buffer', or call M-x `apropos-function' and type in the
-;; pattern.
+;; pattern. This only works after you've installed this library.
 
 ;; Performance:
 ;;
