@@ -10,6 +10,7 @@
 ;; (ert-deftest doctests ()
 ;;   (should (equal 0 (progn (doctest "../contract.el")))))
 
+;; TODO: Add (contract-> contract-any-c contract-any-c)
 (defconst
   contracts
   (list
@@ -60,7 +61,8 @@
     (if (equal one two)
         t
       (message "value: %s" value)
-      (message "contract: %s" (contract-name contract))
+      (message "contract1: %s" (contract-name contract1))
+      (message "contract2: %s" (contract-name contract2))
       nil)))
 
 (propcheck-deftest
@@ -82,6 +84,47 @@
     (equivalent-contracts
      (contract-and-c contract1 contract2)
      (contract-and-c contract2 contract1)
+     value))))
+
+(propcheck-deftest
+ and-not ()
+ (let ((contract (propcheck-generate-one-of nil :values contracts))
+       (value (propcheck-generate-one-of nil :values values)))
+   (propcheck-should
+    (equivalent-contracts
+     (contract-not-c contract-any-c)
+     (contract-and-c contract (contract-not-c contract))
+     value))))
+
+(propcheck-deftest
+ or-dup ()
+ (let ((contract (propcheck-generate-one-of nil :values contracts))
+       (value (propcheck-generate-one-of nil :values values)))
+   (propcheck-should
+    (equivalent-contracts
+     contract
+     (contract-or-c contract contract)
+     value))))
+
+(propcheck-deftest
+ or-commutes ()
+ (let ((contract1 (propcheck-generate-one-of nil :values contracts))
+       (contract2 (propcheck-generate-one-of nil :values contracts))
+       (value (propcheck-generate-one-of nil :values values)))
+   (propcheck-should
+    (equivalent-contracts
+     (contract-or-c contract1 contract2)
+     (contract-or-c contract2 contract1)
+     value))))
+
+(propcheck-deftest
+ or-not ()
+ (let ((contract (propcheck-generate-one-of nil :values contracts))
+       (value (propcheck-generate-one-of nil :values values)))
+   (propcheck-should
+    (equivalent-contracts
+     contract-any-c
+     (contract-or-c contract (contract-not-c contract))
      value))))
 
 (propcheck-deftest

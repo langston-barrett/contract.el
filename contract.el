@@ -322,10 +322,9 @@ Used for bootstrapping (since we don't yet have contracts!)."
    :type string
    :documentation "The negative party/value consumer/client"))
 
-(eval-when-compile
-  (defsubst contract--precond-expect-blame (func blame)
-    "Assert that BLAME is a blame object as a precondition of FUNC."
-    (contract--precond (contract-blame-p blame) func "Expected a blame object.")))
+(defsubst contract--precond-expect-blame (func blame)
+  "Assert that BLAME is a blame object as a precondition of FUNC."
+  (contract--precond (contract-blame-p blame) func "Expected a blame object."))
 
 (defsubst contract--blame-add-context (blame context)
   "TODO BLAME CONTEXT."
@@ -413,7 +412,7 @@ Used for bootstrapping (since we don't yet have contracts!)."
   (let ((blame (contract-violation-blame violation)))
     (concat
      (format
-      "%s\nBlaming: %s (assuming the contract is correct)\nIn: %s\nCall stack:\n  %s"
+      "%s\nBlaming: %s (assuming the contract is correct)\nIn:%s\nCall stack:\n  %s"
       (format
        (contract-violation-format violation)
        (contract--trunc
@@ -421,7 +420,11 @@ Used for bootstrapping (since we don't yet have contracts!)."
         (format "%s" (if (functionp value) "<function value>" value))))
       (contract-blame-positive-party blame)
       (let ((sep "\n  "))
-        (concat sep (string-join (contract-blame-context blame) sep)))
+        ;; Avoid redundant white space.
+        (if (equal 0 (length (contract-blame-context blame)))
+            ""
+          (concat sep (string-join (contract-blame-context blame) sep))
+          ))
       (string-join
        (mapcar
         (lambda (f)
@@ -999,6 +1002,7 @@ The last contract is the contract for the function's return value.
         :first-order ,first-order
         :proj
         (lambda (pos-blame)
+          (contract--precond-expect-blame "projection of contract->" pos-blame)
           (let ((blame (contract--blame-add-context pos-blame name)))
             ;; TODO: Add context to argument and return blames here.
             (lambda (function-value neg-party)
@@ -1051,6 +1055,33 @@ The last contract is the contract for the function's return value.
                    (contract-apply (nth n (list ,@arg-contracts)) (nth n args) arg-blame)))
                  (contract--blame-add-context blame "in the return value of"))))))))))
 
+(eval-when-compile
+  (defmacro contract--does-raise (form)
+    `(condition-case nil
+         (prog1 nil ,form)
+       (contract-violation t)))
+
+  (defmacro contract--doesnt-raise (form)
+    `(not (contract--does-raise ,form)))
+
+  (defmacro contract--any (binding &rest forms)
+    `(cl-loop
+      for ,(car binding) in ,(cadr binding)
+      if ,(if (equal 1 (length forms))
+              (car forms)
+            `(progn ,@forms))
+      return t
+      finally return nil))
+
+  (defmacro contract--all (binding &rest forms)
+    `(cl-loop
+      for ,(car binding) in ,(cadr binding)
+      if (not ,(if (equal 1 (length forms))
+                   (car forms)
+                 `(progn ,@forms)))
+      return nil
+      finally return t)))
+
 (defun contract-and-c (&rest contracts)
   "Construct a conjunction of the given CONTRACTS.
 
@@ -1076,13 +1107,12 @@ The last contract is the contract for the function's return value.
      :metadata metadata
      :first-order
      (lambda (v)
-       (cl-loop
-        for contract in contracts
-        if (not (funcall (contract-contract-first-order contract) v))
-        return nil
-        return t))
+       (contract--all
+        (contract contracts)
+        (funcall (contract-contract-first-order contract) v)))
      :proj
      (lambda (pos-blame)
+       (contract--precond-expect-blame "projection of contract-and-c" pos-blame)
        ;; TODO: Call all the projections with pos-blame here?
        (lambda (value neg-party)
          (contract--ignore value)
@@ -1091,11 +1121,63 @@ The last contract is the contract for the function's return value.
            (setq value (contract-apply c value pos-blame)))
          value)))))
 
-(eval-when-compile
-  (defmacro contract--does-raise (form)
-    `(condition-case nil
-         (prog1 nil ,form)
-       (contract-violation t))))
+(defun contract-or-c (&rest contracts)
+  "Construct a disjunction of the given CONTRACTS.
+
+>> (contract-contract-p (contract-or-c contract-nil-c contract-nil-c))
+=> t
+>> (contract-contract-p (contract-or-c contract-nil-c contract-t-c))
+=> t
+>> (contract-apply (contract-or-c contract-nil-c contract-nil-c) nil
+     (contract-make-blame))
+=> nil"
+
+  (dolist (contract contracts)
+    (contract--precond-expect-contract "contract-or-c" contract))
+  (unless (contract--are-first-order contracts)
+    (error "`contract-or-c' can only handle first-order contracts right now"))
+  (let ((metadata
+         (contract--make-metadata
+          :name (apply
+                 #'contract--sexp-str
+                 "contract-or-c"
+                 (mapcar #'contract-name contracts))
+          :is-constant-time (contract--are-constant-time contracts)
+          :is-first-order (contract--are-first-order contracts))))
+    (contract--make-contract
+     :metadata metadata
+     :first-order
+     (lambda (v)
+       (if (not contracts)
+           t
+         (contract--any
+          (contract contracts)
+          (funcall (contract-contract-first-order contract) v))))
+     :proj
+     (lambda (pos-blame)
+       (contract--precond-expect-blame "projection of contract-or-c" pos-blame)
+       ;; TODO: Call all the projections with pos-blame here?
+       (lambda (value neg-party)
+         (contract--ignore value)
+         (contract--add-negative-party pos-blame neg-party)
+         ;; TODO: Combine first-order parts?
+         (if (not contracts)
+             value
+           (if (contract--any
+                (contract contracts)
+                (contract--doesnt-raise
+                 (funcall
+                  (funcall (contract-contract-proj contract) pos-blame)
+                  value
+                  neg-party)))
+               value
+             (contract-raise-violation
+              (contract--make-violation
+               ;; TODO format
+               :blame pos-blame
+               :metadata metadata
+               :callstack (contract--function-stack))
+              value))))))))
 
 (defun contract-not-c (contract)
   "Negate CONTRACT.
@@ -1103,6 +1185,8 @@ The last contract is the contract for the function's return value.
 >> (contract-contract-p (contract-not-c contract-nil-c))
 => t"
   (contract--precond-expect-contract "contract-not-c" contract)
+  (unless (contract-is-first-order contract)
+    (error "`contract-not-c' can only handle first-order contracts right now"))
   (let* ((name (contract--sexp-str
                 "contract-not-c"
                 (contract-name contract)))
@@ -1117,6 +1201,7 @@ The last contract is the contract for the function's return value.
      (lambda (v) (not (funcall (contract-contract-first-order contract) v)))
      :proj
      (lambda (pos-blame)
+       (contract--precond-expect-blame "projection of contract-not-c" pos-blame)
        (let ((late-neg (funcall (contract-contract-proj contract) pos-blame)))
          (lambda (value neg-party)
            (contract--add-negative-party pos-blame neg-party)
@@ -1131,7 +1216,6 @@ The last contract is the contract for the function's return value.
               value))))))))
 
 ;; TODO: Handling &optional args, &rest args in contract->.
-;; TODO: contract-or-c
 
 ;;;; Attaching Contracts
 
@@ -1180,6 +1264,7 @@ Cautiously will not advice any function with pre-existing advice."
   (setq contract--contract-advise-advised t))
 
 ;; TODO: Rewrite recursive calls to avoid contract checking overhead?
+;; TODO: add fast-contract kwarg
 (defmacro contract-defun (name arguments &rest forms)
   `(setf
     (symbol-function (quote ,name))
@@ -1195,6 +1280,10 @@ Cautiously will not advice any function with pre-existing advice."
       ,(symbol-name name)
       :negative-party
       ,(concat "caller of " (symbol-name name))))))
+
+;; TODO: contract-defconst
+;; TODO: contract-setf
+;; TODO: contract-setq
 
 ;;;; Contracts for Built-Ins
 
