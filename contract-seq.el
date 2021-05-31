@@ -45,8 +45,7 @@
          (contract-lt-c (seq-length seq))))
      ;; Slightly more specific than contract-any-c. A sequence can't be an
      ;; element of itself.
-     (contract-not-c
-      (contract-make-eq-contract seq))))
+     (contract-not-c (contract-eq-c seq))))
 
    ;; Return the first element of SEQUENCE.
    (cons #'seq-first (contract-> contract-sequence-c contract-any-c))

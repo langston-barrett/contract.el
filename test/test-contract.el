@@ -86,7 +86,7 @@
     "contract-t-c"
   ;; TODO: Maybe this should match its name as a variable?
   (it "has a name."
-    (expect (contract-name contract-t-c) :to-equal "eq-to-t"))
+    (expect (contract-name contract-t-c) :to-equal "contract-eq-c"))
   (it "accepts t." (expect t :to-pass contract-t-c))
   (it "rejects nil." (expect nil :to-fail contract-t-c)))
 
@@ -200,7 +200,7 @@ Call stack:
     (expect
      #'identity
      :to-pass
-     (contract->d (i contract-any-c) (contract-make-eq-contract i))))
+     (contract->d (i contract-any-c) (contract-eq-c i))))
   (it
       "accepts identity with its most restrictive contract and argument nil."
     (expect
@@ -209,7 +209,7 @@ Call stack:
        #'identity
        (contract->d
         (i contract-any-c)
-        (contract-make-eq-contract i)))
+        (contract-eq-c i)))
       nil)
      :to-equal
      nil))
@@ -326,7 +326,7 @@ Call stack:
 Blaming: caller of identity (assuming the contract is correct)
 In:
   in the 0th argument of
-  (contract-> eq-to-nil eq-to-nil)
+  (contract-> contract-eq-c contract-eq-c)
 Call stack:
   ")))
 
@@ -383,3 +383,36 @@ Call stack:
               (id nil))))
      :to-equal
      t)))
+
+;; (describe
+;;  "contract-exercise"
+;;  (it "passes with id and (contract-> contract-t-c contract-t-c)."
+;;      (expect
+;;       (progn
+;;         (contract-defun
+;;          id (x)
+;;          :contract (contract-> contract-t-c contract-t-c)
+;;          x)
+;;         (contract-exercise #'id))
+;;       :to-equal
+;;       nil))
+;;  (it "fails with id and (contract-> contract-t-c contract-nil-c)."
+;;      (should-error
+;;       (progn
+;;         (contract-defun
+;;          id (x)
+;;          :contract (contract-> contract-t-c contract-nil-c)
+;;          x)
+;;         (contract-exercise #'id))
+;;       :to-equal
+;;       nil))
+;;  (it "works with id and (contract-> contract-any-c contract-any-c)."
+;;      (expect
+;;       (progn
+;;         (contract-defun
+;;          id (x)
+;;          :contract (contract-> contract-any-c contract-any-c)
+;;          x)
+;;         (contract-exercise #'id))
+;;       :to-equal
+;;       nil)))

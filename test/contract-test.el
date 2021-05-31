@@ -54,6 +54,7 @@
 (fails t contract-nil-c)
 (fails t (contract-and-c contract-nil-c contract-nil-c))
 
+;; TODO: Weaker-than
 (defun equivalent-contracts (contract1 contract2 value)
   "CONTRACT1 fails if and only if CONTRACT2 fails on VALUE."
   (let ((one (fails value contract1))
