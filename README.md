@@ -81,7 +81,7 @@ arguments.
          (seq contract-sequence-c)
          (n (contract-and-c
              contract-nat-number-c
-             (contract-lt-c (seq-length seq))))
+             (contract-<-c (seq-length seq))))
          contract-any-c)
 
 Note how the sequence argument `seq` was used in the contract for the index
@@ -93,9 +93,9 @@ value is not equal to the first argument:
          (seq contract-sequence-c)
          (n (contract-and-c
              contract-nat-number-c
-             (contract-lt-c (seq-length seq))))
+             (contract-<-c (seq-length seq))))
          (contract-not-c
-          (contract-make-eq-contract seq)))
+          (contract-eq-c seq)))
 
 And we could go on, providing more and more guarantees, documentation, and
 helpful error messages.
@@ -127,8 +127,12 @@ values:
 
 Some are functions that create contracts based some input values:
 
-* `contract-lt-c`: Checks that a value is less than a given value.
+* `contract-eq-c`: Checks that a value is `eq` to a given value.
+* `contract-equal-c`: Checks that a value is `equal` to a given value.
+* `contract-<-c`: Checks that a value is less than a given value.
 * `contract-substring-c`: Checks that a value is a substring to a given string.
+* `contract-length-c`: Checks that a sequence has a given length.
+* `contract-the-c`: Checks a CL type predicate (see `cl-the`).
 * and many others...
 
 ### Contract Combinators
@@ -140,6 +144,7 @@ important are:
 * `contract-not-c`: For negating contracts
 * `contract-and-c`
 * `contract-or-c`
+* `contract-cons-of-c`: For pairs of contracts that describe a cons cell
 * `contract->`: For describing functions
 * `contract->d`: For very precise, thorough description of functions
 
@@ -164,6 +169,11 @@ Contracts are be written in the "late negative blame" style by default, which
 can improve performance if contracts are mostly attached to "exported"
 bindings while avoided on "internal" bindings (see Racket's documentation for
 more on this).
+
+Contracts are also very *lazy*: Very little is computed before explicitly
+needed (e.g. error messages, contract names, etc.). Once computed, attributes
+of contracts are cached so they don't need to be recomputed if requested
+again.
 
 ## Development
 

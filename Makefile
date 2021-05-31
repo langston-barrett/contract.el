@@ -2,6 +2,7 @@ CASK = cask
 SRCS = $(wildcard *.el)
 OBJS = $(SRCS:.el=.elc)
 PATTERN = .*
+BUTTERCUP_FLAGS = --stale-file-error
 
 .cask/:
 	$(CASK) install
@@ -15,7 +16,7 @@ build: $(OBJS)
 
 .PHONY: buttercup
 buttercup: build
-	$(CASK) exec buttercup -L . --pattern '$(PATTERN)' test
+	$(CASK) exec buttercup -L . --pattern '$(PATTERN)' $(BUTTERCUP_FLAGS) test
 
 .PHONY: ert
 ert: build
