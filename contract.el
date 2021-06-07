@@ -886,7 +886,7 @@ The invariants are: (TODO)"
 (contract--bootstrap-defun
  contract--make-first-order-contract
  (func format name &optional arguments constant-time)
- (-> function string symbol &optional (or nil list) (or nil boolean)
+ (-> (or function subr) string symbol &optional (or nil list) (or nil boolean)
      contract-contract)
  "Create a first-order contract from a predicate FUNC.
 
@@ -957,7 +957,16 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
    'contract-any-c
    nil
    t)
-  "Contract that doesn't check anything.")
+  "Contract that doesn't check anything, i.e. passes on all values.")
+
+(defconst contract-none-c
+  (contract--make-first-order-contract
+   (lambda (_) nil)
+   "`contract-none-c' never passes on any value. Got %s"
+   'contract-none-c
+   nil
+   t)
+  "Contract that fails on all values.")
 
 (defconst contract-nil-c
   (contract-eq-c nil)
@@ -1191,6 +1200,20 @@ Works in case VAL is:
      (contract-contract-p (contract--coerce-runtime contract))
      func
      "Expected a contract object.")))
+
+(contract--bootstrap-defun
+ contract-check
+ (contract value)
+ (-> contract-contract t boolean)
+ "Check the first-order parts of CONTRACT on VALUE.
+
+>> (contract-check contract-nil-c nil)
+=> t
+>> (contract-check contract-t-c t)
+=> t
+>> (contract-check contract-t-c nil)
+=> nil"
+ (funcall (contract-contract-first-order contract) value))
 
 (contract--bootstrap-defun
  contract-apply
