@@ -8,12 +8,15 @@
 (defun appc (value contract)
   (contract-apply contract value empty-blame))
 
-(defun passes (value contract)
+(defun expect-pass (value contract)
   (prog1 t (appc value contract)))
 
+(defun passes (value contract)
+  (ignore-error contract-violation
+    (expect-pass value contract)))
+
 (defun fails (value contract)
-  (not (ignore-error contract-violation
-         (passes value contract))))
+  (not (passes value contract)))
 
 (defun get-error-message (value contract blame action)
   (condition-case pair
