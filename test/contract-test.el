@@ -296,11 +296,11 @@ BODY is evaluated in a `progn'."
       (message "contract2: %s" (contract-name contract2))
       nil)))
 
-(propcheck-deftest
- pred-basic ()
- (let ((p (propcheck-generate-one-of nil :values predicates)))
-   (propcheck-should
-    (contract-contract-p (pred p)))))
+;; (propcheck-deftest
+;;  pred-basic ()
+;;  (let ((p (propcheck-generate-one-of nil :values predicates)))
+;;    (propcheck-should
+;;     (contract-contract-p (pred p)))))
 
 (defun equivalent-pred-contract (p contract value)
   "CONTRACT is equivalent to `pred' of P on VALUE."

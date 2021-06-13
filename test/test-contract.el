@@ -43,8 +43,8 @@
 (defun format-without-callstack (violation value)
   (contract--format-violation
    (contract--make-violation
+    :contract (contract-violation-contract violation)
     :blame (contract-violation-blame violation)
-    :metadata (contract-violation-metadata violation)
     :callstack '()
     :format (contract-violation-format violation))
    value))
@@ -95,6 +95,11 @@
 
 (describe
  "contract-not-c"
+ (it "has a name."
+     (expect
+      (contract-name (contract-not-c contract-t-c))
+      :to-equal
+      "(contract-not (contract-eq-c t))"))
  (it "accepts t with contract-nil-c."
      (expect t :to-pass (contract-not-c contract-nil-c)))
  (it "accepts nil with contract-t-c."
@@ -102,6 +107,11 @@
 
 (describe
  "contract-lt-c"
+ (it "has a name."
+     (expect
+      (contract-name (contract-lt-c 0))
+      :to-equal
+      "(contract-lt-c 0)"))
  (it "passes." (expect 1 :to-pass (contract-lt-c 2)))
  (it "fails." (expect 2 :to-fail (contract-lt-c 2))))
 
@@ -125,10 +135,18 @@
 Blaming: *unknown* (assuming the contract is correct)
 In:
 Call stack:
-  ")))
+  "))
+ (it "accepts 0." (expect 0 :to-pass contract-nat-number-c))
+ (it "rejects nil." (expect nil :to-fail contract-nat-number-c)))
 
 (describe
  "contract->"
+ (it
+  "has a name."
+  (expect
+   (contract-name (contract-> contract-any-c))
+   :to-equal
+   "(contract-> contract-any-c)"))
  (it "rejects nil with arity 0." (expect nil :to-fail (contract-> contract-any-c)))
  (it "rejects t with arity 0." (expect t :to-fail (contract-> contract-any-c)))
  (it "rejects nil with arity 1."
@@ -190,6 +208,29 @@ Call stack:
 
 (describe
  "contract->d"
+ (it
+  "has a lambda for each argument."
+  (expect
+   (object-of-class-p
+    (funcall
+     (car
+      (oref
+       (contract->d (_ contract-any-c) contract-any-c)
+       arg-contract-lambdas))
+     nil)
+    'contract-contract)
+   :to-equal t))
+ (it
+  "has a lambda for the return value."
+  (expect
+   (object-of-class-p
+    (funcall
+     (oref
+      (contract->d (_ contract-any-c) contract-any-c)
+      ret-contract-lambda)
+     nil)
+    'contract-contract)
+   :to-equal t))
  (it "rejects nil with arity 0." (expect nil :to-fail (contract->d contract-any-c)))
  (it "rejects t with arity 0." (expect t :to-fail (contract->d contract-any-c)))
  (it
@@ -198,6 +239,12 @@ Call stack:
    #'identity
    :to-pass
    (contract->d (_ contract-any-c) contract-any-c)))
+ (it
+  "accepts 1+ with its most restrictive contract."
+  (expect
+   #'1+
+   :to-pass
+   (contract->d (i contract-nat-number-c) (contract-equal-c (+ 1 i)))))
  (it
   "accepts identity with its most restrictive contract."
   (expect
@@ -216,6 +263,16 @@ Call stack:
     nil)
    :to-equal
    nil))
+ (it
+  "accepts 1+ with its most restrictive contract and argument 0."
+  (expect
+   (funcall
+    (appc
+     #'1+
+     (contract->d (i contract-nat-number-c) (contract-equal-c (+ 1 i))))
+    0)
+   :to-equal
+   1))
  (it "blames the contract itself when appropriate."
      (expect
       (blames
@@ -228,8 +285,7 @@ Call stack:
         :negative-party "caller of identity")
        "the contract for the return value"
        (lambda (id) (funcall id t)))
-      :to-be-truthy))
- )
+      :to-be-truthy)))
 
 (describe
  "contract-and-c"

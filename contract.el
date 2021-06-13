@@ -636,7 +636,11 @@ The invariants are: (TODO)"
   ;; TODO: List of what?
   (listp (contract-violation-callstack violation))
   ;; TODO: Predicate for format strings with one placeholder.
-  (contract--non-empty-string-p (contract-violation-format violation))))
+  (or
+   (contract--non-empty-string-p (contract-violation-format violation))
+   (contract--non-empty-string-p
+    (contract--format
+     (contract-violation-contract violation))))))
 
 (eval-when-compile
   ;; TODO: Delete in favor of bootstrap-def*
@@ -723,7 +727,6 @@ The invariants are: (TODO)"
     :documentation "Name of this contract, as derived from its AST.")
    (format
     :initarg :format
-    :initform "Unexpected or incorrect value: %s"
     :documentation "A format string for constructing the error message")
    (is-constant-time
     :initarg :is-constant-time
@@ -772,17 +775,19 @@ unset.
 ;;   (let ((is-fo (contract-metadata-is-first-order metadata)))
 ;;     (or (not is-fo) (booleanp is-fo)))))
 
-;; TODO: All the other properties like this
 (contract--bootstrap-defun
  contract--name
  (value)
  (-> t string)
  "Helper for `contract-name'. VALUE can be anything."
- (if (contract-contract-p value)
-     (let ((constructor-name
-            (symbol-name
-             (contract-ast-constructor (oref value ast))))
-           (args (contract-ast-arguments (oref value ast))))
+ (if (and
+      (eieio-object-p value)
+      (object-of-class-p value 'contract-contract))
+     (let* ((ast (contract--ast value))
+            (constructor-name
+             (symbol-name
+              (contract-ast-constructor ast)))
+            (args (contract-ast-arguments ast)))
        (if (not args)
            constructor-name
          (apply
@@ -815,7 +820,7 @@ Should not be overridden by subclasses, this method is \"final\"."
   "Get the format string of CONTRACT.
 
 Subclasses must override this method or set the format slot."
-  (oref contract format))
+  (contract--oref-or-oset contract format "Unexpected or incorrect value: %s"))
 
 (cl-defmethod contract-is-first-order ((contract contract-contract))
   "Compute whether this contract CONTRACT is first-order."
@@ -921,7 +926,8 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
  (contract--predicate
   :ast (contract--make-ast :constructor name :arguments arguments)
   :format format
-  :is-constant-time constant-time))
+  :is-constant-time constant-time
+  :first-order func))
 
 ;;;;; compare-c
 
@@ -930,8 +936,8 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
     :initarg :compare
     :documentation "Comparison function.")
    (value
-     :initarg :value
-     :documentation "The value to be compared to."))
+    :initarg :value
+    :documentation "The value to be compared to."))
   "Compare values to a given value using a binary relation.")
 
 (cl-defmethod initialize-instance :after ((cmp contract--compare-c) &rest _slots)
@@ -1298,7 +1304,7 @@ Works in case VAL is:
     (functionp val)
     (contract--arity-at-least val 1))
    (contract--coerce-predicate val))
-  ((contract-contract-p val) val)
+  ((object-of-class-p val 'contract-contract) val)
   (t (error
       "Couldn't coerce value to contract; value: %s; type: %s"
       (contract--trunc-format 40 val)
@@ -1355,7 +1361,7 @@ Works in case VAL is:
 => t
 >> (contract-check contract-t-c nil)
 => nil"
- (funcall (contract-contract-first-order contract) value))
+ (funcall (contract-first-order contract) value))
 
 (contract--bootstrap-defun
  contract-apply
@@ -1453,7 +1459,7 @@ after applying VALUE.
   (contract--oref-or-oset
    contract
    proj
-   (let ((num-arg-contracts (1- (length (oref contract name-contract-pairs)))))
+   (let ((num-arg-contracts (length (oref contract arg-contract-lambdas))))
      (lambda (pos-blame)
        ;; TODO: Add context to argument and return blames here?
        (let ((blame (contract--blame-add-context pos-blame "contract->d")))
@@ -1489,6 +1495,24 @@ after applying VALUE.
                    (length args))
                   "\nArguments: %s"))
                 args))
+             (cl-loop
+              for n from 0 to (1- num-arg-contracts)
+              ;; TODO: Allocate argument blame outside the lambda?
+              for arg-blame =
+              (contract--blame-set-positive-party
+               (contract--blame-swap-add-context
+                blame
+                (concat
+                 "in the "
+                 (number-to-string n)
+                 "in th argument of"))
+               "the contract for the return value")
+              ;; TODO: Don't use nth here, maybe zip instead
+              collect
+              (contract-apply
+               (apply (nth n (oref contract arg-contract-lambdas)) args)
+               (nth n args)
+               arg-blame))
              (contract-apply
               (apply
                (oref contract ret-contract-lambda)
@@ -1527,7 +1551,7 @@ after applying VALUE.
                 ;; TODO: Don't use nth here, maybe zip instead
                 collect
                 (contract-apply
-                 (apply (nth n (list (oref contract arg-contract-lambdas))) args)
+                 (apply (nth n (oref contract arg-contract-lambdas)) args)
                  (nth n args)
                  arg-blame)))
               (contract--blame-add-context
@@ -1559,30 +1583,31 @@ return value."
           (cl-loop
            for name-contract-pair in arg-name-contract-pairs
            collect
-           (car name-contract-pair)))
-         (arg-contract-lambdas
-          (cl-loop
-           for name-contract-pair in arg-name-contract-pairs
-           collect
-           `(lambda ,arg-names
+           (car name-contract-pair))))
+    `(contract-->d
+      :arg-contract-lambdas
+      (list
+       ,@(cl-loop
+          for name-contract-pair in arg-name-contract-pairs
+          collect
+          `(function
+            (lambda ,arg-names
               ;; HACK: Avoid unused variable warnings without actually using them.
               ,@(cl-loop
                  for var in arg-names
                  if (not (equal (symbol-name var) "_"))
                  collect `(contract--ignore ,var))
-              ,(car (cdr name-contract-pair)))))
-         (ret-contract-lambda
-          `(lambda ,arg-names
-             ;; HACK: Avoid unused variable warnings without actually using them.
-             ,@(cl-loop
-                for var in arg-names
-                if (not (equal (symbol-name var) "_"))
-                collect `(contract--ignore ,var))
-             ,(car (last name-contract-pairs)))))
-    `(contract-->d
-      :arg-contract-lambdas (list ,@arg-contract-lambdas)
-      :ret-contract-lambda ,ret-contract-lambda
-      :name-contract-pairs ,name-contract-pairs
+              ,(car (cdr name-contract-pair))))))
+      :ret-contract-lambda
+      (function
+       (lambda ,arg-names
+         ;; HACK: Avoid unused variable warnings without actually using them.
+         ,@(cl-loop
+            for var in arg-names
+            if (not (equal (symbol-name var) "_"))
+            collect `(contract--ignore ,var))
+         ,(car (last name-contract-pairs))))
+      :name-contract-pairs (quote ,name-contract-pairs)
       :first-order
       (lambda (value)
         (and
@@ -1601,15 +1626,15 @@ return value."
   "Initialize CONTRACT with some default slot values."
   (oset contract is-first-order nil))
 
-(cl-defmethod contract--ast ((contract contract-->d))
+(cl-defmethod contract--ast ((contract contract-->))
   "Get the AST of CONTRACT."
   (contract--oref-or-oset
    contract
    ast
    (contract--make-ast
     :constructor 'contract->
-    :arguments (list (oref contract arg-contracts)
-                     (oref contract ret-contract)))))
+    :arguments (append (oref contract arg-contracts)
+                       (list (oref contract ret-contract))))))
 
 (cl-defmethod contract-is-constant-time ((contract contract-->))
   "Compute whether this contract CONTRACT is constant-time."
@@ -1693,7 +1718,8 @@ The last contract is the contract for the function's return value.
 >> (contract-contract-p (contract-> contract-nil-c contract-nil-c))
 => t"
   (let* ((num-arg-contracts (- (length contracts) 1))
-         (arg-contracts (seq-take contracts num-arg-contracts))
+         (arg-contracts
+          (seq-take contracts num-arg-contracts))
          (ret-contract (car (last contracts))))
     `(contract-->
       :arg-contracts (list ,@arg-contracts)
@@ -1719,7 +1745,7 @@ The last contract is the contract for the function's return value.
    (lambda (v)
      (contract--all
       (contract (contract--subcontracts contract))
-      (funcall (contract-contract-first-order contract) v)))))
+      (funcall (contract-first-order contract) v)))))
 
 (cl-defmethod contract--ast ((contract contract--and-c))
   "Get the AST of CONTRACT."
@@ -1792,7 +1818,7 @@ The last contract is the contract for the function's return value.
            t
          (contract--any
           (contract contracts)
-          (funcall (contract-contract-first-order contract) v)))))))
+          (funcall (contract-first-order contract) v)))))))
 
 (cl-defmethod contract--ast ((contract contract--or-c))
   "Get the AST of CONTRACT."
@@ -1836,7 +1862,7 @@ The last contract is the contract for the function's return value.
                 (contract contracts)
                 (contract--doesnt-raise
                  (funcall
-                  (funcall (contract-contract-proj contract) pos-blame)
+                  (funcall (contract-projection contract) pos-blame)
                   value
                   neg-party)))
                value
@@ -1876,14 +1902,13 @@ The last contract is the contract for the function's return value.
 
 ;;;;; not-c
 
-(eval-when-compile
-  (defmacro contract--does-raise (form)
-    `(condition-case nil
-         (prog1 nil ,form)
-       (contract-violation t)))
+(defmacro contract--does-raise (form)
+  `(condition-case nil
+       (prog1 nil ,form)
+     (contract-violation t)))
 
-  (defmacro contract--doesnt-raise (form)
-    `(not (contract--does-raise ,form))))
+(defmacro contract--doesnt-raise (form)
+  `(not (contract--does-raise ,form)))
 
 (defclass contract--not-c (contract-contract)
   ((subcontracts                        ; invariant: length 1
@@ -1898,7 +1923,7 @@ The last contract is the contract for the function's return value.
    (lambda (v)
      (not
       (funcall
-       (contract-contract-first-order
+       (contract-first-order
         (car (contract--subcontracts contract))) v)))))
 
 (cl-defmethod contract--ast ((contract contract--not-c))
@@ -1931,7 +1956,10 @@ The last contract is the contract for the function's return value.
    proj
    (lambda (pos-blame)
      (contract--precond-expect-blame "projection of contract-not-c" pos-blame)
-     (let ((late-neg (funcall (contract-contract-proj contract) pos-blame)))
+     (let ((late-neg
+            (funcall
+             (contract-projection (car (contract--subcontracts contract)))
+             pos-blame)))
        (lambda (value neg-party)
          (contract--add-negative-party pos-blame neg-party)
          (if (contract--does-raise (funcall late-neg value neg-party))
