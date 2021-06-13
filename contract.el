@@ -243,6 +243,12 @@
 ;;   Robert Bruce Findler, Cormac Flanagan, and Matthias Felleisen: This paper
 ;;   influenced the implementation of the `contract->d' macro.
 
+;; TODO:
+;;
+;; These items should be resolved before merge:
+;;
+;; - Never access slots via oref or oset, always use :reader and :writer
+;; - Superclass for "combinators" that uses are-*
 
 ;;; Code:
 
@@ -1296,7 +1302,7 @@ Works in case VAL is:
   (t (error
       "Couldn't coerce value to contract; value: %s; type: %s"
       (contract--trunc-format 40 val)
-      (contract--trunc-format 40 val)))))
+      (contract--trunc-format 40 (type-of val))))))
 
 (eval-when-compile
   (defmacro contract--coerce (val)
@@ -1368,7 +1374,7 @@ after applying VALUE.
 >> (contract-apply contract-t-c t (contract-make-blame))
 => t"
  (funcall
-  (funcall (contract-contract-proj (contract--coerce-runtime contract)) blame)
+  (funcall (contract-projection (contract--coerce-runtime contract)) blame)
   value
   (contract-blame-negative-party blame)))
 
@@ -1547,7 +1553,7 @@ the argument symbols.
 This is analogous to Racket's \"->i\" builder, in that it has correct blame
 assignment for contract violations that occur when checking the contract of the
 return value."
-  (let* ((num-arg-contracts (- (length name-contract-pairs) 1))
+  (let* ((num-arg-contracts (1- (length name-contract-pairs)))
          (arg-name-contract-pairs (seq-take name-contract-pairs num-arg-contracts))
          (arg-names
           (cl-loop
@@ -1623,7 +1629,8 @@ return value."
    (let ((num-arg-contracts (length (oref contract arg-contracts))))
      (lambda (pos-blame)
        (contract--precond-expect-blame "projection of contract->" pos-blame)
-       (let ((blame (contract--blame-add-context pos-blame name)))
+       (let* ((name (contract-name contract))
+              (blame (contract--blame-add-context pos-blame name)))
          ;; TODO: Add context to argument and return blames here.
          (lambda (function-value neg-party)
            (contract--add-negative-party blame neg-party)
@@ -1687,16 +1694,187 @@ The last contract is the contract for the function's return value.
 => t"
   (let* ((num-arg-contracts (- (length contracts) 1))
          (arg-contracts (seq-take contracts num-arg-contracts))
-         (ret-contract (car (last contracts)))
-         (first-order ))
+         (ret-contract (car (last contracts))))
     `(contract-->
-      :arg-contracts ,arg-contracts
+      :arg-contracts (list ,@arg-contracts)
       :ret-contract ,ret-contract
       :first-order
       (lambda (value)
         (and
          (functionp value)
          (contract--arity-at-least value ,num-arg-contracts))))))
+
+;;;;; and-c
+
+(defclass contract--and-c (contract-contract)
+  ((subcontracts
+    :initarg :subcontracts
+    :reader contract--subcontracts)))
+
+(cl-defmethod initialize-instance :after ((contract contract--and-c) &rest _slots)
+  "Initialize CONTRACT with some default slot values."
+  (oset
+   contract
+   first-order
+   (lambda (v)
+     (contract--all
+      (contract (contract--subcontracts contract))
+      (funcall (contract-contract-first-order contract) v)))))
+
+(cl-defmethod contract--ast ((contract contract--and-c))
+  "Get the AST of CONTRACT."
+  (contract--oref-or-oset
+   contract
+   ast
+   (contract--make-ast
+    :constructor 'contract-and
+    :arguments (contract--subcontracts contract))))
+
+(cl-defmethod contract-is-constant-time ((contract contract--and-c))
+  "Compute whether this contract CONTRACT is constant-time."
+  (contract--oref-or-oset
+   contract
+   is-constant-time
+   (contract--are-constant-time (contract--subcontracts contract))))
+
+(cl-defmethod contract-is-first-order ((contract contract--and-c))
+  "Compute whether this contract CONTRACT is constant-time."
+  (contract--oref-or-oset
+   contract
+   is-first-order
+   (contract--are-first-order (contract--subcontracts contract))))
+
+(cl-defmethod contract-projection ((contract contract--and-c))
+  "Compute the projection function for CONTRACT."
+  (contract--oref-or-oset
+   contract
+   proj
+   (lambda (pos-blame)
+     (contract--precond-expect-blame "projection of contract-and-c" pos-blame)
+     ;; TODO: Call all the projections with pos-blame here?
+     (lambda (value neg-party)
+       (contract--ignore value)
+       (contract--add-negative-party pos-blame neg-party)
+       (dolist (c (contract--subcontracts contract))
+         (setq value (contract-apply c value pos-blame)))
+       value))))
+
+(contract--bootstrap-defun
+ contract-and-c
+ (&rest contracts)
+ (-> &rest list contract-contract)      ; TODO: List of contracts
+ "Construct a conjunction of the given CONTRACTS.
+
+>> (contract-contract-p (contract-and-c contract-nil-c contract-nil-c))
+=> t
+>> (contract-contract-p (contract-and-c contract-nil-c contract-t-c))
+=> t
+>> (contract-apply (contract-and-c contract-nil-c contract-nil-c) nil
+     (contract-make-blame))
+=> nil"
+ (contract--and-c :subcontracts contracts))
+
+;;;;; or-c
+
+(defclass contract--or-c (contract-contract)
+  ((subcontracts
+    :initarg :subcontracts
+    :reader contract--subcontracts)))
+
+(cl-defmethod initialize-instance :after ((contract contract--or-c) &rest _slots)
+  "Initialize CONTRACT with some default slot values."
+  (oset
+   contract
+   first-order
+   (lambda (v)
+     (let ((contracts (contract--subcontracts contract)))
+       (if (not contracts)
+           t
+         (contract--any
+          (contract contracts)
+          (funcall (contract-contract-first-order contract) v)))))))
+
+(cl-defmethod contract--ast ((contract contract--or-c))
+  "Get the AST of CONTRACT."
+  (contract--oref-or-oset
+   contract
+   ast
+   (contract--make-ast
+    :constructor 'contract-or
+    :arguments (contract--subcontracts contract))))
+
+(cl-defmethod contract-is-constant-time ((contract contract--or-c))
+  "Compute whether this contract CONTRACT is constant-time."
+  (contract--oref-or-oset
+   contract
+   is-constant-time
+   (contract--are-constant-time (contract--subcontracts contract))))
+
+(cl-defmethod contract-is-first-order ((contract contract--or-c))
+  "Compute whether this contract CONTRACT is constant-time."
+  (contract--oref-or-oset
+   contract
+   is-first-order
+   (contract--are-first-order (contract--subcontracts contract))))
+
+(cl-defmethod contract-projection ((contract contract--or-c))
+  "Compute the projection function for CONTRACT."
+  (contract--oref-or-oset
+   contract
+   proj
+   (lambda (pos-blame)
+     (contract--precond-expect-blame "projection of contract-or-c" pos-blame)
+     ;; TODO: Call all the projections with pos-blame here?
+     (lambda (value neg-party)
+       (contract--ignore value)
+       (contract--add-negative-party pos-blame neg-party)
+       ;; TODO: Combine first-order parts?
+       (let ((contracts (contract--subcontracts contract)))
+         (if (not contracts)
+             value
+           (if (contract--any
+                (contract contracts)
+                (contract--doesnt-raise
+                 (funcall
+                  (funcall (contract-contract-proj contract) pos-blame)
+                  value
+                  neg-party)))
+               value
+             (contract-raise-violation
+              (contract--make-violation
+               ;; TODO format
+               :contract contract
+               :blame pos-blame
+               :callstack (contract--function-stack))
+              value))))))))
+
+(contract--bootstrap-defun
+ contract-or-c
+ (&rest contracts)
+ (-> &rest list contract-contract)      ; TODO: List of contracts
+ "Construct a conjunction of the given CONTRACTS.
+
+>> (contract-contract-p (contract-or-c contract-nil-c contract-nil-c))
+=> t
+>> (contract-contract-p (contract-or-c contract-nil-c contract-t-c))
+=> t
+>> (contract-apply (contract-or-c contract-nil-c contract-nil-c) nil
+     (contract-make-blame))
+=> nil"
+ (unless (contract--are-first-order contracts)
+   (error "`contract-or-c' can only handle first-order contracts right now"))
+ (contract--or-c :subcontracts contracts))
+
+;;;;; maybe-c
+
+(contract--bootstrap-defsubst
+ contract-maybe-c
+ (contract)
+ (-> contract-contract contract-contract)
+ "Check that a value is either nil or conforms to CONTRACT."
+ (contract-or-c contract-nil-c contract))
+
+;;;;; not-c
 
 (eval-when-compile
   (defmacro contract--does-raise (form)
@@ -1707,114 +1885,64 @@ The last contract is the contract for the function's return value.
   (defmacro contract--doesnt-raise (form)
     `(not (contract--does-raise ,form))))
 
-(contract--bootstrap-defun
- contract-and-c
- (&rest contracts)
- (-> &rest list contract-contract)  ; TODO: List of contracts
- "Construct a conjunction of the given CONTRACTS.
+(defclass contract--not-c (contract-contract)
+  ((subcontracts                        ; invariant: length 1
+    :initarg :subcontracts
+    :reader contract--subcontracts)))
 
->> (contract-contract-p (contract-and-c contract-nil-c contract-nil-c))
-=> t
->> (contract-contract-p (contract-and-c contract-nil-c contract-t-c))
-=> t
->> (contract-apply (contract-and-c contract-nil-c contract-nil-c) nil
-     (contract-make-blame))
-=> nil"
+(cl-defmethod initialize-instance :after ((contract contract--not-c) &rest _slots)
+  "Initialize CONTRACT with some default slot values."
+  (oset
+   contract
+   first-order
+   (lambda (v)
+     (not
+      (funcall
+       (contract-contract-first-order
+        (car (contract--subcontracts contract))) v)))))
 
- (contract--make-contract
-  :ast (contract--make-ast
-        :constructor 'contract-and-c
-        :arguments contracts)
-  :first-order
-  (lambda (v)
-    (contract--all
-     (contract contracts)
-     (funcall (contract-contract-first-order contract) v)))
-  :proj
-  (lambda (pos-blame)
-    (contract--precond-expect-blame "projection of contract-and-c" pos-blame)
-    ;; TODO: Call all the projections with pos-blame here?
-    (lambda (value neg-party)
-      (contract--ignore value)
-      (contract--add-negative-party pos-blame neg-party)
-      (dolist (c contracts)
-        (setq value (contract-apply c value pos-blame)))
-      value))))
+(cl-defmethod contract--ast ((contract contract--not-c))
+  "Get the AST of CONTRACT."
+  (contract--oref-or-oset
+   contract
+   ast
+   (contract--make-ast
+    :constructor 'contract-not
+    :arguments (contract--subcontracts contract))))
 
-;; TODO: Delete me!
-;; (puthash
-;;  'contract-and-c
-;;  (contract--make-metadata
-;;   :is-constant-time (lambda (&rest args) (contract--are-constant-time args))
-;;   :is-first-order (lambda (&rest args) (contract--are-first-order args)))
-;;  contract-known-constructors)
+(cl-defmethod contract-is-constant-time ((contract contract--not-c))
+  "Compute whether this contract CONTRACT is constant-time."
+  (contract--oref-or-oset
+   contract
+   is-constant-time
+   (contract--are-constant-time (contract--subcontracts contract))))
 
-(contract--bootstrap-defun
- contract-or-c
- (&rest contracts)
- (-> &rest list contract-contract)  ; TODO: List of contracts
- "Construct a disjunction of the given CONTRACTS.
+(cl-defmethod contract-is-first-order ((contract contract--not-c))
+  "Compute whether this contract CONTRACT is constant-time."
+  (contract--oref-or-oset
+   contract
+   is-first-order
+   (contract--are-first-order (contract--subcontracts contract))))
 
->> (contract-contract-p (contract-or-c contract-nil-c contract-nil-c))
-=> t
->> (contract-contract-p (contract-or-c contract-nil-c contract-t-c))
-=> t
->> (contract-apply (contract-or-c contract-nil-c contract-nil-c) nil
-     (contract-make-blame))
-=> nil"
-
- (unless (contract--are-first-order contracts)
-   (error "`contract-or-c' can only handle first-order contracts right now"))
-(contract--make-contract
-    :ast (contract--make-ast
-          :constructor 'contract-or-c
-          :arguments contracts)
-    :first-order
-    (lambda (v)
-      (if (not contracts)
-          t
-        (contract--any
-         (contract contracts)
-         (funcall (contract-contract-first-order contract) v))))
-    :proj
-    (lambda (pos-blame)
-      (contract--precond-expect-blame "projection of contract-or-c" pos-blame)
-      ;; TODO: Call all the projections with pos-blame here?
-      (lambda (value neg-party)
-        (contract--ignore value)
-        (contract--add-negative-party pos-blame neg-party)
-        ;; TODO: Combine first-order parts?
-        (if (not contracts)
-            value
-          (if (contract--any
-               (contract contracts)
-               (contract--doesnt-raise
-                (funcall
-                 (funcall (contract-contract-proj contract) pos-blame)
-                 value
-                 neg-party)))
-              value
-            (contract-raise-violation
-             (contract--make-violation
-              ;; TODO format
-              :blame pos-blame
-              :callstack (contract--function-stack))
-             value)))))))
-
-;; TODO: Delete me!
-;; (puthash
-;;  'contract-or-c
-;;  (contract--make-metadata
-;;   :is-constant-time (lambda (&rest args) (contract--are-constant-time args))
-;;   :is-first-order (lambda (&rest args) (contract--are-first-order args)))
-;;  contract-known-constructors)
-
-(contract--bootstrap-defsubst
- contract-maybe-c
- (contract)
- (-> contract-contract contract-contract)
- "Check that a value is either nil or conforms to CONTRACT."
- (contract-or-c contract-nil-c contract))
+(cl-defmethod contract-projection ((contract contract--not-c))
+  "Compute the projection function for CONTRACT."
+  (contract--oref-or-oset
+   contract
+   proj
+   (lambda (pos-blame)
+     (contract--precond-expect-blame "projection of contract-not-c" pos-blame)
+     (let ((late-neg (funcall (contract-contract-proj contract) pos-blame)))
+       (lambda (value neg-party)
+         (contract--add-negative-party pos-blame neg-party)
+         (if (contract--does-raise (funcall late-neg value neg-party))
+             value
+           (contract-raise-violation
+            (contract--make-violation
+             ;; TODO format
+             :contract contract
+             :blame pos-blame
+             :callstack (contract--function-stack))
+            value)))))))
 
 (contract--bootstrap-defun
  contract-not-c
@@ -1826,34 +1954,7 @@ The last contract is the contract for the function's return value.
 => t"
  (unless (contract-is-first-order contract)
    (error "`contract-not-c' can only handle first-order contracts right now"))
- (contract--make-contract
-  :ast (contract--make-ast
-        :constructor 'contract-not-c
-        :arguments (list contract))
-  :first-order
-  (lambda (v) (not (funcall (contract-contract-first-order contract) v)))
-  :proj
-  (lambda (pos-blame)
-    (contract--precond-expect-blame "projection of contract-not-c" pos-blame)
-    (let ((late-neg (funcall (contract-contract-proj contract) pos-blame)))
-      (lambda (value neg-party)
-        (contract--add-negative-party pos-blame neg-party)
-        (if (contract--does-raise (funcall late-neg value neg-party))
-            value
-          (contract-raise-violation
-           (contract--make-violation
-            ;; TODO format
-            :blame pos-blame
-            :callstack (contract--function-stack))
-           value)))))))
-
-;; TODO: Delete me!
-;; (puthash
-;;  'contract-not-c
-;;  (contract--make-metadata
-;;   :is-constant-time (lambda (arg) (contract-is-constant-time arg))
-;;   :is-first-order (lambda (arg) (contract-is-first-order arg)))
-;;  contract-known-constructors)
+ (contract--not-c :subcontracts (list contract)))
 
 ;; TODO: contract-=-c
 ;; TODO: contract-xor-c
