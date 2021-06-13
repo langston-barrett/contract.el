@@ -243,13 +243,6 @@
 ;;   Robert Bruce Findler, Cormac Flanagan, and Matthias Felleisen: This paper
 ;;   influenced the implementation of the `contract->d' macro.
 
-;; TODO:
-;;
-;; These items should be resolved before merge:
-;;
-;; - Never access slots via oref or oset, always use :reader and :writer
-;; - Superclass for "combinators" that uses are-*
-
 ;;; Code:
 
 ;;;; Imports
@@ -714,8 +707,6 @@ The invariants are: (TODO)"
 
 ;;;;; Contracts
 
-;; TODO: Smart constructor that checks that if is-first-order is nil, so is
-;; first-order.
 (defclass contract-contract ()
   ((ast
     :initarg :ast
@@ -747,15 +738,7 @@ The invariants are: (TODO)"
     :documentation "Late-negative projection function. From the Racket guide: \"Specifically, a late neg projection accepts a blame object without the negative blame information and then returns a function that accepts both the value to be contracted and the name of the negative party, in that order. The returned function then in turn returns the value with the contract.\""))
   "`contract-contract' is a class so that its methods have (mutable) access to
 its data - many of its properties are lazily calculated from its AST and then
-cached.
-
-TODO: When should something subclass this vs. be a function that makes one of
-these? And same question further down the line?
-
-Answer: Probably everything should be subclasses, using constructors can make it
-\"impossible\" to construct ill-formed structs/structs with necessary values
-unset.
-"
+cached."
   :abstract t)
 
 ;; TODO
@@ -934,16 +917,18 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
 (defclass contract--compare-c (contract--predicate)
   ((compare
     :initarg :compare
+    :reader contract--compare
     :documentation "Comparison function.")
    (value
     :initarg :value
+    :reader contract--value
     :documentation "The value to be compared to."))
   "Compare values to a given value using a binary relation.")
 
 (cl-defmethod initialize-instance :after ((cmp contract--compare-c) &rest _slots)
   "Initialize CMP with some default slot values."
-  (let ((value (oref cmp value))
-        (compare (oref cmp compare)))
+  (let ((value (contract--value cmp))
+        (compare (contract--compare cmp)))
     (oset cmp first-order (lambda (val) (funcall compare val value)))))
 
 (cl-defmethod contract--ast ((cmp contract--compare-c))
@@ -953,7 +938,7 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
    ast
    (contract--make-ast
     :constructor 'contract-compare-c
-    :arguments (list (oref cmp compare) (oref cmp value)))))
+    :arguments (list (contract--compare cmp) (contract--value cmp)))))
 
 (cl-defmethod contract--format ((cmp contract--compare-c))
   "Get the format string of CMP."
@@ -962,8 +947,8 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
    format
    (format
     "Expected a value that compares to %s with %s"
-    (contract--trunc-format 30 (oref cmp value))
-    (contract--trunc-format 30 (oref cmp compare)))))
+    (contract--trunc-format 30 (contract--value cmp))
+    (contract--trunc-format 30 (contract--compare cmp)))))
 
 (contract--bootstrap-defun
  contract-compare-c
@@ -995,7 +980,7 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
    ast
    (contract--make-ast
     :constructor 'contract-eq-c
-    :arguments (list (oref eqc value)))))
+    :arguments (list (contract--value eqc)))))
 
 (cl-defmethod contract--format ((eqc contract--eq-c))
   "Get the format string of EQC."
@@ -1004,7 +989,7 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
    format
    (format
     "Expected a value that is `eq' to %s"
-    (contract--trunc-format 30 (oref eqc value)))))
+    (contract--trunc-format 30 (contract--value eqc)))))
 
 (contract--bootstrap-defun
  contract-eq-c
@@ -1034,7 +1019,7 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
    ast
    (contract--make-ast
     :constructor 'contract-equal-c
-    :arguments (list (oref eqc value)))))
+    :arguments (list (contract--value eqc)))))
 
 (cl-defmethod contract--format ((eqc contract--equal-c))
   "Get the format string of EQC."
@@ -1043,7 +1028,7 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
    format
    (format
     "Expected a value that is `equal' to %s"
-    (contract--trunc-format 30 (oref eqc value)))))
+    (contract--trunc-format 30 (contract--value eqc)))))
 
 (contract--bootstrap-defun
  contract-equal-c
@@ -1078,9 +1063,7 @@ CONSTANT-TIME indicates whether the contract is considered \"fast\"."
   (contract--oref-or-oset
    anyc
    format
-   (format
-    "Expected any value, got %s. This is probably a bug in contract.el."
-    (contract--trunc-format 30 (oref anyc value)))))
+   "Expected any value, got %s. This is probably a bug in contract.el."))
 
 (defconst
   contract-any-c
@@ -1429,9 +1412,51 @@ after applying VALUE.
 ;;      (t
 ;;       (message "HUH: %s" form))))
 
+;;;;; arrow
+
+(defclass contract--arrow (contract-contract)
+  ())
+
+(cl-defmethod initialize-instance :after ((contract contract--arrow) &rest _slots)
+  "Initialize CONTRACT with some default slot values."
+  (oset contract is-first-order nil))
+
+(cl-defmethod contract--check-arity ((contract contract--arrow) arity blame func)
+  "Check that FUNC has arity at least ARITY or raise BLAME with CONTRACT."
+  (unless (funcall (contract-first-order contract) func)
+    (contract-raise-violation
+     (contract--make-violation
+      :blame blame
+      :callstack (contract--function-stack)
+      :contract contract
+      :format
+      (concat
+       (format
+        "Wrong function arity. Expected arity at least: %s\n"
+        arity)
+       "Function: %s"))
+     func)))
+
+(cl-defmethod contract--check-num-args ((contract contract--arrow) arity blame args)
+  "Check that the ARITY of CONTRACT is compatible with ARGS or raise BLAME."
+  (unless (equal arity (length args))
+    (contract-raise-violation
+     (contract--make-violation
+      :blame blame
+      :callstack (contract--function-stack)
+      :contract contract
+      :format
+      (concat
+       (format
+        "Wrong number of arguments to function:\nExpected: %s\nFound: %s"
+        arity
+        (length args))
+       "\nArguments: %s"))
+     args)))
+
 ;;;;; ->d
 
-(defclass contract-->d (contract-contract)
+(defclass contract-->d (contract--arrow)
   ((name-contract-pairs
     :initarg :name-contract-pairs)
    (arg-contract-lambdas
@@ -1441,7 +1466,6 @@ after applying VALUE.
 
 (cl-defmethod initialize-instance :after ((contract contract-->d) &rest _slots)
   "Initialize CONTRACT with some default slot values."
-  (oset contract is-first-order nil)
   ;; Can't guarantee that runtime-generated contracts will be constant-time
   (oset contract is-constant-time nil))
 
@@ -1467,34 +1491,13 @@ after applying VALUE.
            (contract--add-negative-party blame neg-party)
            ;; Check the first-order bits before returning the new closure that
            ;; applies the whole contract.
-           (unless (funcall (contract-first-order contract) function-value)
-             (contract-raise-violation
-              (contract--make-violation
-               :blame blame
-               :callstack (contract--function-stack)
-               :contract contract
-               :format
-               (concat
-                (format
-                 "Wrong function arity. Expected arity at least: %s\n"
-                 num-arg-contracts)
-                "Function: %s"))
-              function-value))
+           (contract--check-arity
+            contract
+            num-arg-contracts
+            blame
+            function-value)
            (lambda (&rest args)
-             (unless (equal num-arg-contracts (length args))
-               (contract-raise-violation
-                (contract--make-violation
-                 :blame blame
-                 :callstack (contract--function-stack)
-                 :contract contract
-                 :format
-                 (concat
-                  (format
-                   "Wrong number of arguments to function:\nExpected: %s\nFound: %s"
-                   num-arg-contracts
-                   (length args))
-                  "\nArguments: %s"))
-                args))
+             (contract--check-num-args contract num-arg-contracts blame args)
              (cl-loop
               for n from 0 to (1- num-arg-contracts)
               ;; TODO: Allocate argument blame outside the lambda?
@@ -1616,7 +1619,7 @@ return value."
 
 ;;;;; ->
 
-(defclass contract--> (contract-contract)
+(defclass contract--> (contract--arrow)
   ((arg-contracts
     :initarg :arg-contracts)
    (ret-contract
@@ -1661,34 +1664,13 @@ return value."
            (contract--add-negative-party blame neg-party)
            ;; Check the first-order bits before returning the new closure that
            ;; applies the whole contract.
-           (unless (funcall (contract-first-order contract) function-value)
-             (contract-raise-violation
-              (contract--make-violation
-               :blame blame
-               :callstack (contract--function-stack)
-               :contract contract
-               :format
-               (concat
-                (format
-                 "Wrong function arity. Expected arity at least: %s\n"
-                 num-arg-contracts)
-                "Function: %s"))
-              function-value))
+           (contract--check-arity
+            contract
+            num-arg-contracts
+            blame
+            function-value)
            (lambda (&rest args)
-             (unless (equal num-arg-contracts (length args))
-               (contract-raise-violation
-                (contract--make-violation
-                 :blame blame
-                 :callstack (contract--function-stack)
-                 :contract contract
-                 :format
-                 (concat
-                  (format
-                   "Wrong number of arguments to function:\nExpected: %s\nFound: %s"
-                   num-arg-contracts
-                   (length args))
-                  "\nArguments: %s"))
-                args))
+             (contract--check-num-args contract num-arg-contracts blame args)
              (contract-apply
               (oref contract ret-contract)
               (apply
@@ -1730,13 +1712,38 @@ The last contract is the contract for the function's return value.
          (functionp value)
          (contract--arity-at-least value ,num-arg-contracts))))))
 
-;;;;; and-c
+;;;;; builder-c
 
-(defclass contract--and-c (contract-contract)
+(defclass contract--builder-c (contract-contract)
   ((subcontracts
     :initarg :subcontracts
-    :reader contract--subcontracts)))
+    :reader contract--subcontracts))
+  :abstract t)
 
+(cl-defmethod contract--ast ((_contract contract--builder-c))
+  "Get the AST of CONTRACT."
+  (error "Subclasses of `contract--builder-c must override `contract--ast'"))
+
+(cl-defmethod contract-is-constant-time ((contract contract--builder-c))
+  "Compute whether this contract CONTRACT is constant-time."
+  (contract--oref-or-oset
+   contract
+   is-constant-time
+   (contract--are-constant-time (contract--subcontracts contract))))
+
+(cl-defmethod contract-is-first-order ((contract contract--builder-c))
+  "Compute whether this contract CONTRACT is constant-time."
+  (contract--oref-or-oset
+   contract
+   is-first-order
+   (contract--are-first-order (contract--subcontracts contract))))
+
+;;;;; and-c
+
+(defclass contract--and-c (contract--builder-c)
+  ())
+
+;; TODO: This should go in `contract-first-order'
 (cl-defmethod initialize-instance :after ((contract contract--and-c) &rest _slots)
   "Initialize CONTRACT with some default slot values."
   (oset
@@ -1755,20 +1762,6 @@ The last contract is the contract for the function's return value.
    (contract--make-ast
     :constructor 'contract-and
     :arguments (contract--subcontracts contract))))
-
-(cl-defmethod contract-is-constant-time ((contract contract--and-c))
-  "Compute whether this contract CONTRACT is constant-time."
-  (contract--oref-or-oset
-   contract
-   is-constant-time
-   (contract--are-constant-time (contract--subcontracts contract))))
-
-(cl-defmethod contract-is-first-order ((contract contract--and-c))
-  "Compute whether this contract CONTRACT is constant-time."
-  (contract--oref-or-oset
-   contract
-   is-first-order
-   (contract--are-first-order (contract--subcontracts contract))))
 
 (cl-defmethod contract-projection ((contract contract--and-c))
   "Compute the projection function for CONTRACT."
@@ -1802,11 +1795,12 @@ The last contract is the contract for the function's return value.
 
 ;;;;; or-c
 
-(defclass contract--or-c (contract-contract)
+(defclass contract--or-c (contract--builder-c)
   ((subcontracts
     :initarg :subcontracts
     :reader contract--subcontracts)))
 
+;; TODO: This should go in `contract-first-order'
 (cl-defmethod initialize-instance :after ((contract contract--or-c) &rest _slots)
   "Initialize CONTRACT with some default slot values."
   (oset
@@ -1828,20 +1822,6 @@ The last contract is the contract for the function's return value.
    (contract--make-ast
     :constructor 'contract-or
     :arguments (contract--subcontracts contract))))
-
-(cl-defmethod contract-is-constant-time ((contract contract--or-c))
-  "Compute whether this contract CONTRACT is constant-time."
-  (contract--oref-or-oset
-   contract
-   is-constant-time
-   (contract--are-constant-time (contract--subcontracts contract))))
-
-(cl-defmethod contract-is-first-order ((contract contract--or-c))
-  "Compute whether this contract CONTRACT is constant-time."
-  (contract--oref-or-oset
-   contract
-   is-first-order
-   (contract--are-first-order (contract--subcontracts contract))))
 
 (cl-defmethod contract-projection ((contract contract--or-c))
   "Compute the projection function for CONTRACT."
@@ -1910,11 +1890,12 @@ The last contract is the contract for the function's return value.
 (defmacro contract--doesnt-raise (form)
   `(not (contract--does-raise ,form)))
 
-(defclass contract--not-c (contract-contract)
+(defclass contract--not-c (contract--builder-c)
   ((subcontracts                        ; invariant: length 1
     :initarg :subcontracts
     :reader contract--subcontracts)))
 
+;; TODO: This should go in `contract-first-order'
 (cl-defmethod initialize-instance :after ((contract contract--not-c) &rest _slots)
   "Initialize CONTRACT with some default slot values."
   (oset
@@ -1934,20 +1915,6 @@ The last contract is the contract for the function's return value.
    (contract--make-ast
     :constructor 'contract-not
     :arguments (contract--subcontracts contract))))
-
-(cl-defmethod contract-is-constant-time ((contract contract--not-c))
-  "Compute whether this contract CONTRACT is constant-time."
-  (contract--oref-or-oset
-   contract
-   is-constant-time
-   (contract--are-constant-time (contract--subcontracts contract))))
-
-(cl-defmethod contract-is-first-order ((contract contract--not-c))
-  "Compute whether this contract CONTRACT is constant-time."
-  (contract--oref-or-oset
-   contract
-   is-first-order
-   (contract--are-first-order (contract--subcontracts contract))))
 
 (cl-defmethod contract-projection ((contract contract--not-c))
   "Compute the projection function for CONTRACT."
