@@ -609,7 +609,11 @@ Conforms to the invariants specified in `contract-valid-violation-p'."
   (callstack
    nil
    :read-only t
-   :documentation "The callstack in which the violation occurred"))
+   :documentation "The callstack in which the violation occurred")
+  (format
+   nil
+   :read-only t
+   :documentation "Format string for the error message"))
 
 ;; TODO: Error messages!
 (contract--bootstrap-defun
@@ -647,7 +651,10 @@ The invariants are: (TODO)"
     (format
      "%s\nBlaming: %s (assuming the contract is correct)\nIn:%s\nCall stack:\n  %s"
      (format
-      (contract-violation-format violation)
+      (let ((fmt (contract-violation-format violation)))
+        (if fmt
+            fmt
+          (contract--format (contract-violation-contract violation))))
       (contract--trunc-format
        60
        (if (functionp value) "<function value>" value)))
@@ -1410,6 +1417,116 @@ after applying VALUE.
 ;;      (t
 ;;       (message "HUH: %s" form))))
 
+;;;;; ->d
+
+(defclass contract-->d (contract-contract)
+  ((name-contract-pairs
+    :initarg :name-contract-pairs)
+   (arg-contract-lambdas
+    :initarg :arg-contract-lambdas)
+   (ret-contract-lambda
+    :initarg :ret-contract-lambda)))
+
+(cl-defmethod initialize-instance :after ((contract contract-->d) &rest _slots)
+  "Initialize CONTRACT with some default slot values."
+  (oset contract is-first-order nil)
+  ;; Can't guarantee that runtime-generated contracts will be constant-time
+  (oset contract is-constant-time nil))
+
+(cl-defmethod contract--ast ((contract contract-->d))
+  "Get the AST of CONTRACT."
+  (contract--oref-or-oset
+   contract
+   ast
+   (contract--make-ast
+    :constructor 'contract->d
+    :arguments (oref contract name-contract-pairs))))
+
+(cl-defmethod contract-projection ((contract contract-->d))
+  "Compute the projection function for CONTRACT."
+  (contract--oref-or-oset
+   contract
+   proj
+   (let ((num-arg-contracts (1- (length (oref contract name-contract-pairs)))))
+     (lambda (pos-blame)
+       ;; TODO: Add context to argument and return blames here?
+       (let ((blame (contract--blame-add-context pos-blame "contract->d")))
+         (lambda (function-value neg-party)
+           (contract--add-negative-party blame neg-party)
+           ;; Check the first-order bits before returning the new closure that
+           ;; applies the whole contract.
+           (unless (funcall (contract-first-order contract) function-value)
+             (contract-raise-violation
+              (contract--make-violation
+               :blame blame
+               :callstack (contract--function-stack)
+               :contract contract
+               :format
+               (concat
+                (format
+                 "Wrong function arity. Expected arity at least: %s\n"
+                 num-arg-contracts)
+                "Function: %s"))
+              function-value))
+           (lambda (&rest args)
+             (unless (equal num-arg-contracts (length args))
+               (contract-raise-violation
+                (contract--make-violation
+                 :blame blame
+                 :callstack (contract--function-stack)
+                 :contract contract
+                 :format
+                 (concat
+                  (format
+                   "Wrong number of arguments to function:\nExpected: %s\nFound: %s"
+                   num-arg-contracts
+                   (length args))
+                  "\nArguments: %s"))
+                args))
+             (contract-apply
+              (apply
+               (oref contract ret-contract-lambda)
+               ;; NOTE: The blame change here is what makes this 'indy', i.e.
+               ;; conform to the specification laid out in "Correct Blame for
+               ;; Contracts: No More Scapegoating".
+               (cl-loop
+                for n from 0 to (1- num-arg-contracts)
+                ;; TODO: Allocate argument blame outside the lambda?
+                for arg-blame =
+                (contract--blame-set-positive-party
+                 (contract--blame-swap-add-context
+                  blame
+                  (concat
+                   "in the "
+                   (number-to-string n)
+                   "in th argument of"))
+                 "the contract for the return value")
+                ;; TODO: Don't use nth here, maybe zip instead
+                collect
+                (contract-apply
+                 (apply (nth n (oref contract arg-contract-lambdas)) args)
+                 (nth n args)
+                 arg-blame)))
+              (apply
+               function-value
+               (cl-loop
+                for n from 0 to (1- num-arg-contracts)
+                ;; TODO: Allocate argument blame outside the lambda?
+                for arg-blame = (contract--blame-swap-add-context
+                                 blame
+                                 (concat
+                                  "in the "
+                                  (number-to-string n)
+                                  "th argument of"))
+                ;; TODO: Don't use nth here, maybe zip instead
+                collect
+                (contract-apply
+                 (apply (nth n (list (oref contract arg-contract-lambdas))) args)
+                 (nth n args)
+                 arg-blame)))
+              (contract--blame-add-context
+               blame
+               "in the return value of")))))))))
 
 ;; TODO: Optimize to not create a lambda when an argument contract has no
 ;; dependency on other arguments, and in this case to coerce the "contract-like"
@@ -1431,10 +1548,6 @@ This is analogous to Racket's \"->i\" builder, in that it has correct blame
 assignment for contract violations that occur when checking the contract of the
 return value."
   (let* ((num-arg-contracts (- (length name-contract-pairs) 1))
-         (first-order (lambda (value)
-                        (and
-                         (functionp value)
-                         (contract--arity-at-least value num-arg-contracts))))
          (arg-name-contract-pairs (seq-take name-contract-pairs num-arg-contracts))
          (arg-names
           (cl-loop
@@ -1460,105 +1573,110 @@ return value."
                 if (not (equal (symbol-name var) "_"))
                 collect `(contract--ignore ,var))
              ,(car (last name-contract-pairs)))))
-    `(contract--make-contract
-      :ast ,(contract--make-ast
-             :constructor 'contract->d
-             :arguments name-contract-pairs)
-      :first-order ,first-order
-      :proj
-      (lambda (pos-blame)
-        ;; TODO: Add context to argument and return blames here.
-        (let ((blame (contract--blame-add-context pos-blame "contract->d")))
-          (lambda (function-value neg-party)
-            (contract--add-negative-party blame neg-party)
-            ;; Check the first-order bits before returning the new closure that
-            ;; applies the whole contract.
-            (unless (funcall ,first-order function-value)
-              (contract-raise-violation
-               (contract--make-violation
-                :blame blame
-                :callstack (contract--function-stack)
-                ;; :format
-                ;; (concat
-                ;;  (format
-                ;;   "Wrong function arity. Expected arity at least: %s\n"
-                ;;   ,num-arg-contracts)
-                ;;  "Function: %s")
-                )
-               function-value))
-            (lambda (&rest args)
-              (unless (equal ,num-arg-contracts (length args))
-                (contract-raise-violation
-                 (contract--make-violation
-                  :blame blame
-                  :callstack (contract--function-stack)
-                  ;; :format
-                  ;; (concat
-                  ;;  (format
-                  ;;   "Wrong number of arguments to function:\nExpected: %s\nFound: %s"
-                  ;;   ,num-arg-contracts
-                  ;;   (length args))
-                  ;;  "\nArguments: %s")
-                  )
-                 args))
-              (contract-apply
-               (apply
-                ,ret-contract-lambda
-                ;; NOTE: The blame change here is what makes this 'indy', i.e.
-                ;; conform to the specification laid out in "Correct Blame for
-                ;; Contracts: No More Scapegoating".
-                (cl-loop
-                 for n from 0 to ,(- num-arg-contracts 1)
-                 ;; TODO: Allocate argument blame outside the lambda?
-                 for arg-blame =
-                 (contract--blame-set-positive-party
-                  (contract--blame-swap-add-context
-                   blame
-                   (concat
-                    "in the "
-                    (number-to-string n)
-                    "in th argument of"))
-                  "the contract for the return value")
-                 ;; TODO: Don't use nth here, maybe zip instead
-                 collect
-                 (contract-apply
-                  (apply (nth n (list ,@arg-contract-lambdas)) args)
-                  (nth n args)
-                  arg-blame)))
-               (apply
-                function-value
-                ;; TODO: An actual loop is not necessary - we have a
-                ;; statically-known number of arguments here, and could apply
-                ;; their contracts in an unfolded sequence. Might not be true once
-                ;; &rest args are handled, though. But maybe even then the required
-                ;; args could be unfolded.
-                (cl-loop
-                 for n from 0 to ,(- num-arg-contracts 1)
-                 ;; TODO: Allocate argument blame outside the lambda?
-                 for arg-blame = (contract--blame-swap-add-context
-                                  blame
-                                  (concat
-                                   "in the "
-                                   (number-to-string n)
-                                   "th argument of"))
-                 ;; TODO: Don't use nth here, maybe zip instead
-                 collect
-                 (contract-apply
-                  (apply (nth n (list ,@arg-contract-lambdas)) args)
-                  (nth n args)
-                  arg-blame)))
-               (contract--blame-add-context
-                blame
-                "in the return value of")))))))))
+    `(contract-->d
+      :arg-contract-lambdas (list ,@arg-contract-lambdas)
+      :ret-contract-lambda ,ret-contract-lambda
+      :name-contract-pairs ,name-contract-pairs
+      :first-order
+      (lambda (value)
+        (and
+         (functionp value)
+         (contract--arity-at-least value ,num-arg-contracts))))))
 
-;; TODO: Delete me!
-;; (puthash
-;;  'contract->d
-;;  (contract--make-metadata
-;;   ;; Can't guarantee that runtime-generated contracts will be constant-time
-;;   :is-constant-time nil
-;;   :is-first-order nil)
-;;  contract-known-constructors)
+;;;;; ->
+
+(defclass contract--> (contract-contract)
+  ((arg-contracts
+    :initarg :arg-contracts)
+   (ret-contract
+    :initarg :ret-contract)))
+
+(cl-defmethod initialize-instance :after ((contract contract-->) &rest _slots)
+  "Initialize CONTRACT with some default slot values."
+  (oset contract is-first-order nil))
+
+(cl-defmethod contract--ast ((contract contract-->d))
+  "Get the AST of CONTRACT."
+  (contract--oref-or-oset
+   contract
+   ast
+   (contract--make-ast
+    :constructor 'contract->
+    :arguments (list (oref contract arg-contracts)
+                     (oref contract ret-contract)))))
+
+(cl-defmethod contract-is-constant-time ((contract contract-->))
+  "Compute whether this contract CONTRACT is constant-time."
+  (contract--oref-or-oset
+   contract
+   is-constant-time
+   (contract--are-constant-time
+    (cons
+     (oref contract ret-contract)
+     (oref contract arg-contracts)))))
+
+(cl-defmethod contract-projection ((contract contract-->))
+  "Compute the projection function for CONTRACT."
+  (contract--oref-or-oset
+   contract
+   proj
+   (let ((num-arg-contracts (length (oref contract arg-contracts))))
+     (lambda (pos-blame)
+       (contract--precond-expect-blame "projection of contract->" pos-blame)
+       (let ((blame (contract--blame-add-context pos-blame name)))
+         ;; TODO: Add context to argument and return blames here.
+         (lambda (function-value neg-party)
+           (contract--add-negative-party blame neg-party)
+           ;; Check the first-order bits before returning the new closure that
+           ;; applies the whole contract.
+           (unless (funcall (contract-first-order contract) function-value)
+             (contract-raise-violation
+              (contract--make-violation
+               :blame blame
+               :callstack (contract--function-stack)
+               :contract contract
+               :format
+               (concat
+                (format
+                 "Wrong function arity. Expected arity at least: %s\n"
+                 num-arg-contracts)
+                "Function: %s"))
+              function-value))
+           (lambda (&rest args)
+             (unless (equal num-arg-contracts (length args))
+               (contract-raise-violation
+                (contract--make-violation
+                 :blame blame
+                 :callstack (contract--function-stack)
+                 :contract contract
+                 :format
+                 (concat
+                  (format
+                   "Wrong number of arguments to function:\nExpected: %s\nFound: %s"
+                   num-arg-contracts
+                   (length args))
+                  "\nArguments: %s"))
+                args))
+             (contract-apply
+              (oref contract ret-contract)
+              (apply
+               function-value
+               (cl-loop
+                for n from 0 to (1- num-arg-contracts)
+                ;; TODO: Allocate argument blame outside the lambda?
+                for arg-blame = (contract--blame-swap-add-context
+                                 blame
+                                 (concat
+                                  "in the "
+                                  (number-to-string n)
+                                  "th argument of"))
+                ;; TODO: Don't use nth here, maybe zip instead
+                collect
+                (contract-apply
+                 (nth n (oref contract arg-contracts))
+                 (nth n args)
+                 arg-blame)))
+              (contract--blame-add-context blame "in the return value of")))))))))
 
 (defmacro contract-> (&rest contracts)
   "Construct a contract for a function out of CONTRACTS.
@@ -1570,82 +1688,15 @@ The last contract is the contract for the function's return value.
   (let* ((num-arg-contracts (- (length contracts) 1))
          (arg-contracts (seq-take contracts num-arg-contracts))
          (ret-contract (car (last contracts)))
-         (first-order (lambda (value)
-                        (and
-                         (functionp value)
-                         (contract--arity-at-least value num-arg-contracts)))))
-    `(let* ((name
-             (apply
-              #'contract--sexp-str
-              "contract->"
-              (mapcar #'contract-name (list ,@contracts)))))
-       (contract--make-contract
-        :ast ,(contract--make-ast
-               :constructor 'contract->
-               :arguments contracts)
-        :first-order ,first-order
-        :proj
-        (lambda (pos-blame)
-          (contract--precond-expect-blame "projection of contract->" pos-blame)
-          (let ((blame (contract--blame-add-context pos-blame name)))
-            ;; TODO: Add context to argument and return blames here.
-            (lambda (function-value neg-party)
-              (contract--add-negative-party blame neg-party)
-              ;; Check the first-order bits before returning the new closure that
-              ;; applies the whole contract.
-              (unless (funcall ,first-order function-value)
-                (contract-raise-violation
-                 (contract--make-violation
-                  :blame blame
-                  :callstack (contract--function-stack)
-                  ;; :format
-                  ;; (concat
-                  ;;  (format
-                  ;;   "Wrong function arity. Expected arity at least: %s\n"
-                  ;;   ,num-arg-contracts)
-                  ;;  "Function: %s")
-                  )
-                 function-value))
-              (lambda (&rest args)
-                (unless (equal ,num-arg-contracts (length args))
-                  (contract-raise-violation
-                   (contract--make-violation
-                    :blame blame
-                    :callstack (contract--function-stack)
-                    ;; :format
-                    ;; (concat
-                    ;;  (format
-                    ;;   "Wrong number of arguments to function:\nExpected: %s\nFound: %s"
-                    ;;   ,num-arg-contracts
-                    ;;   (length args))
-                    ;;  "\nArguments: %s")
-                    )
-                   args))
-                (contract-apply
-                 ,ret-contract
-                 (apply
-                  function-value
-                  (cl-loop
-                   for n from 0 to ,(- num-arg-contracts 1)
-                   ;; TODO: Allocate argument blame outside the lambda?
-                   for arg-blame = (contract--blame-swap-add-context
-                                    blame
-                                    (concat
-                                     "in the "
-                                     (number-to-string n)
-                                     "th argument of"))
-                   ;; TODO: Don't use nth here, maybe zip instead
-                   collect
-                   (contract-apply (nth n (list ,@arg-contracts)) (nth n args) arg-blame)))
-                 (contract--blame-add-context blame "in the return value of"))))))))))
-
-;; TODO: Delete me!
-;; (puthash
-;;  'contract->
-;;  (contract--make-metadata
-;;   :is-constant-time (lambda (&rest args) (contract--are-constant-time args))
-;;   :is-first-order nil)
-;;  contract-known-constructors)
+         (first-order ))
+    `(contract-->
+      :arg-contracts ,arg-contracts
+      :ret-contract ,ret-contract
+      :first-order
+      (lambda (value)
+        (and
+         (functionp value)
+         (contract--arity-at-least value ,num-arg-contracts))))))
 
 (eval-when-compile
   (defmacro contract--does-raise (form)
